@@ -18,6 +18,10 @@ export default function ForgotPassword({ goLogin }) {
         try {
             await sendPasswordResetEmail(auth, email);
             setMsg("Письмо с восстановлением пароля отправлено!");
+
+            setTimeout(async () => {
+                goLogin(email);
+            },2000)
         } catch (err) {
             setError("Ошибка: " + err.message);
         }

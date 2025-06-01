@@ -1,33 +1,54 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useLocation } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 import { db, storage } from "../../firebase";
 import { getDownloadURL, ref } from "firebase/storage";
 import {
-    Box, Typography, CircularProgress, Card, LinearProgress
+    Box, Typography, CircularProgress, Card, LinearProgress, Button
 } from "@mui/material";
 
 export default function PatientProfile() {
     const { id } = useParams();
-    const location = useLocation();
-    const [patient, setPatient] = useState(location.state || null);
-    const [loading, setLoading] = useState(!location.state);
+
+    const [patient, setPatient] = useState(null);
+    const [loading, setLoading] = useState(true);
     const [photoUrl, setPhotoUrl] = useState("/images/default_user.png");
+    const [folderName, setFolderName] = useState("");
 
+    // Загружаем данные пациента и имя папки
     useEffect(() => {
-        if (!patient) {
-            const refDoc = doc(db, "Patient", id);
-            getDoc(refDoc).then((snap) => {
+        const loadPatient = async () => {
+            try {
+                const refDoc = doc(db, "Patient", id);
+                const snap = await getDoc(refDoc);
                 if (snap.exists()) {
-                    setPatient({ id: snap.id, ...snap.data() });
-                }
-                setLoading(false);
-            });
-        } else {
-            setLoading(false);
-        }
-    }, [id, patient]);
+                    const patientData = { id: snap.id, ...snap.data() };
+                    setPatient(patientData);
 
+                    // Загружаем имя видеопапки
+                    if (patientData.folderId) {
+                        const folderRef = doc(db, "video_folders", patientData.folderId);
+                        const folderSnap = await getDoc(folderRef);
+                        if (folderSnap.exists()) {
+                            setFolderName(folderSnap.data().name);
+                        } else {
+                            setFolderName("Папка не найдена");
+                        }
+                    } else {
+                        setFolderName("Папка не назначена");
+                    }
+                }
+            } catch (e) {
+                console.error("Ошибка загрузки пациента:", e);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        loadPatient();
+    }, [id]);
+
+    // Загружаем фото пациента
     useEffect(() => {
         if (patient?.id) {
             const path = ref(storage, `PatientProfile/${patient.id}.jpg`);
@@ -37,13 +58,27 @@ export default function PatientProfile() {
         }
     }, [patient]);
 
+    const handleAddFolderClick = () => {
+        window.location.href = `/select-folder/${id}`;
+    };
+
     if (loading || !patient) {
         return <Box textAlign="center" mt={5}><CircularProgress /></Box>;
     }
 
     return (
-        <Card sx={{ maxWidth: 1300, mx: "auto", mt: 8, display: "flex", overflow: "hidden", boxShadow: 6 }}>
-            {/* Фото справа */}
+        <Card
+            sx={{
+                maxWidth: 1300,
+                mx: "auto",
+                mt: 8,
+                display: "flex",
+                overflow: "hidden",
+                boxShadow: 6,
+                borderRadius: 4
+            }}
+        >
+            {/* Левая часть — прямоугольное фото */}
             <Box
                 sx={{
                     flex: 1.5,
@@ -54,14 +89,14 @@ export default function PatientProfile() {
                 }}
             />
 
-            {/* Данные слева */}
+            {/* Правая часть — скруглена справа */}
             <Box
                 sx={{
                     flex: 2.2,
                     p: 6,
                     backgroundColor: "#f5f5f5",
-                    borderTopLeftRadius: 200,
-                    borderBottomLeftRadius: 200,
+                    borderTopRightRadius: 200,
+                    borderBottomRightRadius: 200,
                     display: "flex",
                     flexDirection: "column",
                     justifyContent: "center"
@@ -78,13 +113,22 @@ export default function PatientProfile() {
                 <Typography variant="h6"><strong>Диагноз:</strong> {patient.diagnosis}</Typography>
                 <Typography variant="h6"><strong>Этап реабилитации:</strong> {patient.rehabStage}</Typography>
                 <Typography variant="h6"><strong>Адрес:</strong> {patient.address}</Typography>
-                <Typography variant="h6"><strong>Папка видео:</strong> {patient.folderId}</Typography>
+                <Typography variant="h6"><strong>Папка:</strong> {folderName}</Typography>
 
                 <Box mt={5}>
                     <Typography gutterBottom variant="h6"><strong>Общий прогресс:</strong></Typography>
                     <LinearProgress variant="determinate" value={70} sx={{ height: 12, borderRadius: 6 }} />
                     <Typography variant="body2" color="text.secondary">70% просмотрено / выполнено</Typography>
                 </Box>
+
+                <Button
+                    variant="contained"
+                    color="primary"
+                    sx={{ mt: 2 }}
+                    onClick={handleAddFolderClick}
+                >
+                    {patient.folderId ? "Изменить видеопапку" : "Добавить видеопапку"}
+                </Button>
             </Box>
         </Card>
     );

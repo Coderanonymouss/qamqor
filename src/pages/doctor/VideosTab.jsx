@@ -18,6 +18,8 @@ import VideosInFolder from "./VideosInFolder.jsx";
 
 export default function VideosTab({ user }) {
     const [folders, setFolders] = useState([]);
+    const [filteredFolders, setFilteredFolders] = useState([]);
+    const [searchText, setSearchText] = useState("");
     const [open, setOpen] = useState(false);
     const [folderName, setFolderName] = useState("");
     const [error, setError] = useState("");
@@ -30,10 +32,19 @@ export default function VideosTab({ user }) {
 
     useEffect(() => {
         const unsub = onSnapshot(collection(db, "video_folders"), snap => {
-            setFolders(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            const foldersData = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setFolders(foldersData);
         });
         return () => unsub();
     }, []);
+
+    useEffect(() => {
+        const lower = searchText.toLowerCase();
+        const filtered = folders.filter(f =>
+            f.name.toLowerCase().includes(lower)
+        );
+        setFilteredFolders(filtered);
+    }, [searchText, folders]);
 
     const handleCreateOrEdit = async () => {
         setError("");
@@ -96,16 +107,9 @@ export default function VideosTab({ user }) {
     }
 
     return (
-        <Box
-            sx={{
-                flexGrow: 1,
-                minHeight: "100%",
-                display: "flex",
-                flexDirection: "column",
-            }}
-        >
+        <Box sx={{ flexGrow: 1, minHeight: "100%", display: "flex", flexDirection: "column" }}>
             <Box sx={{ maxWidth: "100%", px: 3, py: 2 }}>
-                <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+                <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                     <Typography variant="h4" fontWeight="bold" color="white">
                         Папки с видеоуроками
                     </Typography>
@@ -118,17 +122,20 @@ export default function VideosTab({ user }) {
                     </Button>
                 </Box>
 
-                {folders.length === 0 ? (
-                    <Alert severity="info">Папок пока нет. Создайте первую!</Alert>
+                <TextField
+                    fullWidth
+                    variant="outlined"
+                    placeholder="Поиск по названию папки..."
+                    value={searchText}
+                    onChange={e => setSearchText(e.target.value)}
+                    sx={{ mb: 3 }}
+                />
+
+                {filteredFolders.length === 0 ? (
+                    <Alert severity="info">Папок не найдено. Измените запрос или создайте новую.</Alert>
                 ) : (
-                    <Box
-                        sx={{
-                            display: "grid",
-                            gridTemplateColumns: "repeat(4, 1fr)",
-                            gap: 3,
-                        }}
-                    >
-                        {folders.map(folder => (
+                    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
+                        {filteredFolders.map(folder => (
                             <Card
                                 key={folder.id}
                                 sx={{

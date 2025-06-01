@@ -17,11 +17,13 @@ import BarChartIcon from "@mui/icons-material/BarChart";
 import Dashboard from "./doctor/Dashboard";
 import Patients from "./doctor/Patients";
 import VideosTab from "./doctor/VideosTab";
-import ChatTab from "./doctor/Chat";
+import ChatTab from ".//doctor//Chat.jsx";
 import EditProfileTab from "./doctor/EditProfileTab";
-import AnalyticsTab from "./doctor/AnalyticsTab";
 import PatientProfile from "./doctor/PatientProfile";
-;
+import AddPatientWeb from "./doctor/AddPatientWeb.jsx";
+import PatientsAnalyticsPage from "./doctor/PatientsAnalyticsPage.jsx";
+import SelectFolder from "./doctor/SelectFolder.jsx";
+
 
 export default function DoctorPanel({ onLogout }) {
     const [user, setUser] = useState(null);
@@ -115,7 +117,7 @@ export default function DoctorPanel({ onLogout }) {
             <Box
                 sx={{
                     flexGrow: 1,
-                    backgroundImage: `url("/images/font_1.jpg")`,
+                    backgroundImage: `url("/images/photo.jpg")`,
                     backgroundSize: "cover",
                     backgroundPosition: "center",
                     backgroundRepeat: "no-repeat",
@@ -124,12 +126,15 @@ export default function DoctorPanel({ onLogout }) {
                 }}
             >
                 <Routes>
+
+                    <Route path="/doctor/add-patient" element={<AddPatientWeb/>} />
+                    <Route path="/select-folder/:id" element={<SelectFolder />} />
                     <Route path="/doctor/patient-profile/:id" element={<PatientProfile />} />
                     <Route path="/doctor/dashboard" element={<Dashboard />} />
                     <Route path="/doctor/patients" element={<Patients />} />
                     <Route path="/doctor/videos" element={<VideosTab />} />
                     <Route path="/doctor/chat" element={<ChatTab user={user} />} />
-                    <Route path="/doctor/analytics" element={<AnalyticsTab user={user} />} />
+                    <Route path="/doctor/analytics" element={<PatientsAnalyticsPage user={user} />} />
                     <Route path="/doctor/edit" element={<EditProfileTab user={user} />} />
                 </Routes>
                 <Outlet />
