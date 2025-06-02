@@ -1,6 +1,6 @@
 // pages/DoctorPanel.jsx — версия с pages вместо табов и обновлённым дизайном
 import React, { useEffect, useState } from "react";
-import { auth, db } from "../firebase";
+import { auth, db } from "/src/firebase.jsx";
 import { doc, getDoc } from "firebase/firestore";
 import {
     Box, Paper, Avatar, Typography, Button, CircularProgress, Stack

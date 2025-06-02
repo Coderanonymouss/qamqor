@@ -1,175 +1,216 @@
 import React, { useEffect, useState } from "react";
-import { db, auth } from "../../firebase"; // auth — для текущего пользователя
-import { collection, query, where, getDocs } from "firebase/firestore";
-import { Card, CardContent, Typography, Button, TextField, Box, CircularProgress } from "@mui/material";
-import { useNavigate } from "react-router-dom";
+import {
+    Box, Typography, Table, TableHead, TableBody, TableRow,
+    TableCell, Paper, CircularProgress, TextField, Button
+} from "@mui/material";
+import { db, auth } from "../../firebase";
+import { collection, getDocs, query, where, setDoc, doc } from "firebase/firestore";
+import { Pie } from "react-chartjs-2";
+import { saveAs } from "file-saver";
+import * as XLSX from "xlsx";
 
-export default function PatientsAnalyticsPage() {
+import {
+    Chart as ChartJS,
+    ArcElement,
+    Tooltip,
+    Legend
+} from 'chart.js';
+ChartJS.register(ArcElement, Tooltip, Legend);
+
+export default function PatientMedicineAnalyticsTable() {
     const [patients, setPatients] = useState([]);
-    const [filtered, setFiltered] = useState([]);
+    const [filteredPatients, setFilteredPatients] = useState([]);
     const [search, setSearch] = useState("");
     const [loading, setLoading] = useState(true);
     const [selectedPatient, setSelectedPatient] = useState(null);
-    const [patientStats, setPatientStats] = useState(null);
-
-    const navigate = useNavigate();
+    const [medicineRows, setMedicineRows] = useState([]);
+    const [videoStats, setVideoStats] = useState({ viewed: 0, total: 0 });
 
     useEffect(() => {
-        async function fetchPatients() {
-            setLoading(true);
+        const fetchPatients = async () => {
             const currentUser = auth.currentUser;
             if (!currentUser) return;
             const q = query(collection(db, "Patient"), where("doctorUid", "==", currentUser.uid));
             const snap = await getDocs(q);
-            const pats = snap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
-            setPatients(pats);
-            setFiltered(pats);
+            const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setPatients(list);
+            setFilteredPatients(list);
             setLoading(false);
-        }
+        };
         fetchPatients();
     }, []);
 
     useEffect(() => {
         if (!search) {
-            setFiltered(patients);
+            setFilteredPatients(patients);
         } else {
             const lower = search.toLowerCase();
-            setFiltered(patients.filter(
-                p =>
-                    (p.iin && p.iin.includes(lower)) ||
-                    (p.email && p.email.toLowerCase().includes(lower)) ||
-                    ((p.lastName + " " + p.firstName + " " + (p.middleName || "")).toLowerCase().includes(lower))
+            setFilteredPatients(patients.filter(p =>
+                (p.iin && p.iin.includes(lower)) ||
+                (p.email && p.email.toLowerCase().includes(lower)) ||
+                ((p.lastName + " " + p.firstName + " " + (p.middleName || "")).toLowerCase().includes(lower))
             ));
         }
     }, [search, patients]);
 
-    // Получаем аналитику для выбранного пациента
-    async function fetchPatientStats(patientId) {
+    const getTodayKey = () => {
+        const now = new Date();
+        return now.toISOString().split("T")[0];
+    };
+
+    const fetchMedicineAnalytics = async (patientId) => {
         const medsRef = collection(db, "users", patientId, "medicines");
         const medsSnap = await getDocs(medsRef);
 
-        const medicinesData = [];
-        for (const doc of medsSnap.docs) {
-            const med = doc.data();
-            const intakesRef = collection(db, "users", patientId, "medicines", doc.id, "intakes");
+        const rows = [];
+        let totalAccepted = 0;
+        let totalMissed = 0;
+        let totalToday = 0;
+        let takenToday = 0;
+
+        for (const docSnap of medsSnap.docs) {
+            const med = docSnap.data();
+            const intakesRef = collection(db, "users", patientId, "medicines", docSnap.id, "intakes");
             const intakesSnap = await getDocs(intakesRef);
+            const intakes = intakesSnap.docs.map(d => d.data());
 
-            // Подсчёт статистики приёмов
-            const intakesList = intakesSnap.docs.map(intakeDoc => intakeDoc.data());
+            const todayTaken = intakes.filter(i => i.status === true && i.datetime?.startsWith(getTodayKey())).length;
+            const todayMissed = intakes.filter(i => i.status === false && i.datetime?.startsWith(getTodayKey())).length;
 
-            // Считаем успешно принятые и всего
-            let total = intakesList.length;
-            let accepted = intakesList.filter(i => i.status === "accepted" || i.status === "✅").length;
-            let missed = intakesList.filter(i => i.status === "missed" || i.status === "❌").length;
+            const total = intakes.length;
+            const accepted = intakes.filter(i => i.status === true).length;
+            const missed = intakes.filter(i => i.status === false).length;
 
-            medicinesData.push({
-                ...med,
-                id: doc.id,
-                totalIntakes: total,
+            takenToday += todayTaken;
+            totalToday += todayTaken + todayMissed;
+            totalAccepted += accepted;
+            totalMissed += missed;
+
+            rows.push({
+                name: med.name,
+                takenToday: todayTaken,
                 accepted,
                 missed,
-                intakes: intakesList,
+                total
             });
         }
 
-        setPatientStats({
-            medicinesTaken: medicinesData.length,
-            missedIntakes: medicinesData.reduce((acc, med) => acc + med.missed, 0),
-            medicines: medicinesData,
+        const videosRef = collection(db, "users", patientId, "video_progress");
+        const videosSnap = await getDocs(videosRef);
+        const viewedCount = videosSnap.docs.filter(doc => doc.data().status === true).length;
+        setVideoStats({ viewed: viewedCount, total: videosSnap.docs.length });
+
+        await setDoc(doc(db, "users", patientId, "progress_summary", getTodayKey()), {
+            uid: patientId,
+            date: getTodayKey(),
+            taken: takenToday,
+            missed: totalToday - takenToday,
+            total: totalToday,
+            timestamp: new Date()
         });
-    }
 
-    function handleSelectPatient(p) {
-        setSelectedPatient(p);
-        fetchPatientStats(p.id);
-    }
+        await setDoc(doc(db, "analytics", patientId), {
+            patientId,
+            accepted: totalAccepted,
+            missed: totalMissed,
+            medicines: rows,
+            updatedAt: new Date()
+        });
 
-    if (loading) return <CircularProgress />;
+        setMedicineRows(rows);
+    };
+
+    const exportToExcel = () => {
+        const ws = XLSX.utils.json_to_sheet(medicineRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Medicine Analytics");
+        const excelBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+        const file = new Blob([excelBuffer], { type: "application/octet-stream" });
+        saveAs(file, "analytics.xlsx");
+    };
+
+    if (loading) return <Box textAlign="center"><CircularProgress /></Box>;
 
     return (
         <Box sx={{ p: 3 }}>
+            <Typography variant="h5" mb={2}>Аналитика приёма лекарств</Typography>
+
             <TextField
-                label="Поиск по ИИН, ФИО или Email"
+                fullWidth
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                fullWidth
+                label="Поиск пациента по ИИН, Email или ФИО"
                 sx={{ mb: 3 }}
             />
-            <div style={{
-                display: "grid",
-                gap: 16,
-                gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-                marginBottom: 32
-            }}>
-                {filtered.map((p) => (
-                    <Card
-                        key={p.id}
-                        variant={selectedPatient && selectedPatient.id === p.id ? "outlined" : "elevation"}
-                        sx={{ cursor: "pointer", border: selectedPatient && selectedPatient.id === p.id ? "2px solid #22BE87" : "" }}
-                        onClick={() => handleSelectPatient(p)}
-                    >
-                        <CardContent>
-                            <Typography variant="h6">
-                                {p.lastName || ""} {p.firstName || ""} {p.middleName || ""}
-                            </Typography>
-                            <Typography variant="body2" color="textSecondary">ИИН: {p.iin}</Typography>
-                            <Typography variant="body2">{p.email}</Typography>
-                            <Button
-                                variant="outlined"
-                                sx={{ mt: 2 }}
-                                onClick={e => {
-                                    e.stopPropagation();
-                                    navigate(`/analytics/patient/${p.id}`);
-                                }}
-                            >
-                                Детально
-                            </Button>
-                        </CardContent>
-                    </Card>
-                ))}
-                {filtered.length === 0 && <Typography>Пациентов не найдено.</Typography>}
-            </div>
 
-            {/* Аналитика выбранного пациента */}
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, mb: 4 }}>
+                {filteredPatients.map(p => (
+                    <Paper
+                        key={p.id}
+                        onClick={() => {
+                            setSelectedPatient(p);
+                            fetchMedicineAnalytics(p.id);
+                        }}
+                        sx={{ p: 2, cursor: "pointer", border: selectedPatient?.id === p.id ? "2px solid #22BE87" : "1px solid #ccc" }}
+                    >
+                        <Typography variant="subtitle1">{p.lastName} {p.firstName}</Typography>
+                        <Typography variant="body2">ИИН: {p.iin}</Typography>
+                        <Typography variant="body2">{p.email}</Typography>
+                    </Paper>
+                ))}
+            </Box>
+
             {selectedPatient && (
-                <Card>
-                    <CardContent>
-                        <Typography variant="h6" gutterBottom>Аналитика пациента:</Typography>
-                        <Typography>
-                            <strong>ФИО:</strong> {selectedPatient.lastName} {selectedPatient.firstName} {selectedPatient.middleName || ""}
-                        </Typography>
-                        <Typography>
-                            <strong>Email:</strong> {selectedPatient.email}
-                        </Typography>
-                        <Typography>
-                            <strong>ИИН:</strong> {selectedPatient.iin}
-                        </Typography>
-                        <Box sx={{ mt: 2 }}>
-                            {patientStats ? (
-                                <>
-                                    <Typography>
-                                        <strong>Всего приемов лекарства:</strong> {patientStats.medicinesTaken}
-                                    </Typography>
-                                    <Typography>
-                                        <strong>Пропущено приемов:</strong> {patientStats.missedIntakes}
-                                    </Typography>
-                                    {patientStats.medicines.map((medicine) => (
-                                        <Box key={medicine.id} sx={{ mt: 2 }}>
-                                            <Typography variant="h6">{medicine.name}</Typography>
-                                            <Typography>Всего приёмов: {medicine.totalIntakes}</Typography>
-                                            <Typography>
-                                                Принято: {medicine.accepted} &nbsp;&nbsp;
-                                                Пропущено: {medicine.missed}
-                                            </Typography>
-                                        </Box>
-                                    ))}
-                                </>
-                            ) : (
-                                <Typography>Загрузка аналитики...</Typography>
-                            )}
+                <>
+                    <Typography variant="h6" gutterBottom>
+                        Таблица приёма лекарств для {selectedPatient.lastName} {selectedPatient.firstName}
+                    </Typography>
+
+                    <Button variant="outlined" onClick={exportToExcel} sx={{ mb: 2 }}>
+                        📥 Экспорт в Excel
+                    </Button>
+
+                    <Paper sx={{ overflowX: "auto" }}>
+                        <Table>
+                            <TableHead>
+                                <TableRow>
+                                    <TableCell>Название</TableCell>
+                                    <TableCell>Принято сегодня</TableCell>
+                                    <TableCell>Принято всего</TableCell>
+                                    <TableCell>Пропущено всего</TableCell>
+                                    <TableCell>Всего приёмов</TableCell>
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {medicineRows.map((row, idx) => (
+                                    <TableRow key={idx} hover>
+                                        <TableCell>{row.name}</TableCell>
+                                        <TableCell>{row.takenToday}</TableCell>
+                                        <TableCell>{row.accepted}</TableCell>
+                                        <TableCell>{row.missed}</TableCell>
+                                        <TableCell>{row.total}</TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </Paper>
+
+                    {videoStats.total > 0 && (
+                        <Box mt={4} width={300}>
+                            <Typography variant="h6" gutterBottom>Просмотр видео</Typography>
+                            <Pie
+                                data={{
+                                    labels: ["Просмотрено", "Не просмотрено"],
+                                    datasets: [{
+                                        label: "Видео",
+                                        data: [videoStats.viewed, videoStats.total - videoStats.viewed],
+                                        backgroundColor: ["#2196f3", "#eeeeee"]
+                                    }]
+                                }}
+                            />
                         </Box>
-                    </CardContent>
-                </Card>
+                    )}
+                </>
             )}
         </Box>
     );

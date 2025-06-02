@@ -1,21 +1,24 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { doc, getDoc } from "firebase/firestore";
-import { db, storage } from "../../firebase";
+import { useParams, useNavigate } from "react-router-dom";
+import { doc, getDoc, deleteDoc } from "firebase/firestore";
+import { db, storage, auth } from "/src/firebase";
 import { getDownloadURL, ref } from "firebase/storage";
 import {
-    Box, Typography, CircularProgress, Card, LinearProgress, Button
+    Box, Typography, CircularProgress, Card, LinearProgress, Button, Dialog,
+    DialogActions, DialogContent, DialogContentText, DialogTitle, IconButton
 } from "@mui/material";
+import DeleteIcon from "@mui/icons-material/Delete";
 
 export default function PatientProfile() {
     const { id } = useParams();
+    const navigate = useNavigate();
 
     const [patient, setPatient] = useState(null);
     const [loading, setLoading] = useState(true);
     const [photoUrl, setPhotoUrl] = useState("/images/default_user.png");
     const [folderName, setFolderName] = useState("");
+    const [confirmOpen, setConfirmOpen] = useState(false);
 
-    // Загружаем данные пациента и имя папки
     useEffect(() => {
         const loadPatient = async () => {
             try {
@@ -25,7 +28,6 @@ export default function PatientProfile() {
                     const patientData = { id: snap.id, ...snap.data() };
                     setPatient(patientData);
 
-                    // Загружаем имя видеопапки
                     if (patientData.folderId) {
                         const folderRef = doc(db, "video_folders", patientData.folderId);
                         const folderSnap = await getDoc(folderRef);
@@ -48,7 +50,6 @@ export default function PatientProfile() {
         loadPatient();
     }, [id]);
 
-    // Загружаем фото пациента
     useEffect(() => {
         if (patient?.id) {
             const path = ref(storage, `PatientProfile/${patient.id}.jpg`);
@@ -60,6 +61,18 @@ export default function PatientProfile() {
 
     const handleAddFolderClick = () => {
         window.location.href = `/select-folder/${id}`;
+    };
+
+    const handleDeletePatient = async () => {
+        try {
+            await deleteDoc(doc(db, "Patient", id));
+            setTimeout(() => {
+                navigate("/patients", { replace: true });
+            }, 100); // задержка, чтобы Firebase успел синхронизироваться
+        } catch (e) {
+            console.error("Ошибка удаления:", e);
+            alert("Произошла ошибка при удалении.");
+        }
     };
 
     if (loading || !patient) {
@@ -75,10 +88,18 @@ export default function PatientProfile() {
                 display: "flex",
                 overflow: "hidden",
                 boxShadow: 6,
-                borderRadius: 4
+                borderRadius: 4,
+                position: "relative"
             }}
         >
-            {/* Левая часть — прямоугольное фото */}
+            <IconButton
+                sx={{ position: "absolute", top: 16, right: 16 }}
+                onClick={() => setConfirmOpen(true)}
+                color="error"
+            >
+                <DeleteIcon />
+            </IconButton>
+
             <Box
                 sx={{
                     flex: 1.5,
@@ -89,7 +110,6 @@ export default function PatientProfile() {
                 }}
             />
 
-            {/* Правая часть — скруглена справа */}
             <Box
                 sx={{
                     flex: 2.2,
@@ -121,15 +141,32 @@ export default function PatientProfile() {
                     <Typography variant="body2" color="text.secondary">70% просмотрено / выполнено</Typography>
                 </Box>
 
-                <Button
-                    variant="contained"
-                    color="primary"
-                    sx={{ mt: 2 }}
-                    onClick={handleAddFolderClick}
-                >
-                    {patient.folderId ? "Изменить видеопапку" : "Добавить видеопапку"}
-                </Button>
+                <Box mt={3} display="flex" gap={2}>
+                    <Button
+                        variant="contained"
+                        color="primary"
+                        onClick={handleAddFolderClick}
+                    >
+                        {patient.folderId ? "Изменить видеопапку" : "Добавить видеопапку"}
+                    </Button>
+                </Box>
             </Box>
+
+            <Dialog
+                open={confirmOpen}
+                onClose={() => setConfirmOpen(false)}
+            >
+                <DialogTitle>Подтверждение удаления</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>
+                        Вы уверены, что хотите удалить этого пациента? Это действие необратимо.
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setConfirmOpen(false)}>Отмена</Button>
+                    <Button onClick={handleDeletePatient} color="error" variant="contained">Удалить</Button>
+                </DialogActions>
+            </Dialog>
         </Card>
     );
 }

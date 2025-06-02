@@ -1,13 +1,16 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
     Box, Typography, List, ListItem, ListItemAvatar, Avatar, ListItemText,
     CircularProgress, TextField, IconButton, Paper, Stack
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
-import { db, auth } from "../../firebase";
+import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
+import MicIcon from '@mui/icons-material/Mic';
+import { db, auth, storage } from "../../firebase";
 import {
     collection, query, where, onSnapshot, addDoc, orderBy, serverTimestamp
 } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 export default function MyChatsList() {
     const [patients, setPatients] = useState([]);
@@ -18,185 +21,204 @@ export default function MyChatsList() {
     const [messageText, setMessageText] = useState("");
     const [messages, setMessages] = useState([]);
     const bottomRef = useRef(null);
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
 
     useEffect(() => {
-        const currentUser = auth.currentUser;
-        if (!currentUser) return;
-
-        const q = query(
-            collection(db, "Patient"),
-            where("doctorId", "==", currentUser.email)
-        );
-
-        const unsubscribe = onSnapshot(q, async (snapshot) => {
-            const patientList = snapshot.docs.map((docSnap) => {
-                const data = docSnap.data();
-                const fullName = `${data.firstName || ""} ${data.lastName || ""}`.trim();
+        const q = query(collection(db, "Patient"), where("doctorId", "==", auth.currentUser.email));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const list = snapshot.docs.map((doc) => {
+                const d = doc.data();
                 return {
-                    id: docSnap.id,
-                    name: fullName,
-                    photo: data.photoUrl || "/images/default_user.png",
-                    email: data.email || "",
-                    iin: data.iin || ""
+                    id: doc.id,
+                    name: `${d.firstName} ${d.lastName}`,
+                    photo: d.photoUrl || "/images/default_user.png",
+                    email: d.email || "",
+                    iin: d.iin || ""
                 };
             });
-            setPatients(patientList);
-            setFilteredPatients(patientList);
+            setPatients(list);
+            setFilteredPatients(list);
             setLoading(false);
         });
-
         return () => unsubscribe();
     }, []);
 
     useEffect(() => {
-        const lower = searchText.toLowerCase();
-        const filtered = patients.filter((p) =>
-            p.name.toLowerCase().includes(lower) ||
-            p.email.toLowerCase().includes(lower) ||
-            p.iin.toLowerCase().includes(lower)
-        );
-        setFilteredPatients(filtered);
+        const f = searchText.toLowerCase();
+        setFilteredPatients(patients.filter(p =>
+            p.name.toLowerCase().includes(f) ||
+            p.email.toLowerCase().includes(f) ||
+            p.iin.toLowerCase().includes(f)
+        ));
     }, [searchText, patients]);
 
     const openChat = (patient) => {
         setSelectedPatient(patient);
-        loadMessages(patient);
-    };
-
-    const loadMessages = (patient) => {
         const chatId = [patient.email, auth.currentUser.email].sort().join("_");
         const msgRef = collection(db, "chat", chatId, "message");
         const q = query(msgRef, orderBy("dateCreated"));
-
-        const unsubscribe = onSnapshot(q, (snap) => {
+        const unsub = onSnapshot(q, (snap) => {
             const data = snap.docs.map(doc => doc.data());
             setMessages(data);
             bottomRef.current?.scrollIntoView({ behavior: "smooth" });
         });
-
-        return unsubscribe;
     };
 
-    const sendMessage = async () => {
-        if (!messageText.trim()) return;
+    const sendMessage = async (type, content, extra = {}) => {
+        if (type === "text" && !content.trim()) return;
 
-        const doctorEmail = auth.currentUser.email;
-        const patientEmail = selectedPatient.email;
+        const doctor = auth.currentUser.email;
+        const patient = selectedPatient.email;
+        const chatId = [doctor, patient].sort().join("_");
 
-        const chatId1 = [doctorEmail, patientEmail].join("_");
-        const chatId2 = [patientEmail, doctorEmail].join("_");
-
-        const message = {
-            text: messageText,
-            sender: doctorEmail,
-            senderName: "Вы",
-            dateCreated: serverTimestamp(),
-            type: "text",
-            duration: 0,
-            fileUrl: null
+        const msg = {
+            text: type === "text" ? content.trim() : "",
+            sender: doctor,
+            type,
+            fileUrl: extra.fileUrl || null,
+            duration: extra.duration || null,
+            dateCreated: serverTimestamp()
         };
 
-        const msgRef1 = collection(db, "chat", chatId1, "message");
-        const msgRef2 = collection(db, "chat", chatId2, "message");
-
-        await Promise.all([
-            addDoc(msgRef1, message),
-            addDoc(msgRef2, message)
-        ]);
-
+        const msgRef = collection(db, "chat", chatId, "message");
+        await addDoc(msgRef, msg);
         setMessageText("");
     };
 
-    if (loading) {
-        return <Box textAlign="center" mt={5}><CircularProgress /></Box>;
-    }
+    const handleImageUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const path = `chat_images/${Date.now()}_${file.name}`;
+        const imageRef = ref(storage, path);
+        await uploadBytes(imageRef, file);
+        const url = await getDownloadURL(imageRef);
+        sendMessage("image", "", { fileUrl: url });
+    };
+
+    const handleAudioRecord = async () => {
+        if (!mediaRecorderRef.current) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const recorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = recorder;
+
+            recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+
+            recorder.onstop = async () => {
+                const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+                const path = `chat_audio/${Date.now()}.webm`;
+                const audioRef = ref(storage, path);
+                await uploadBytes(audioRef, blob, { contentType: "audio/webm" });
+                const url = await getDownloadURL(audioRef);
+                sendMessage("audio", "", { fileUrl: url });
+                audioChunksRef.current = [];
+            };
+
+            recorder.start();
+        } else {
+            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current = null;
+        }
+    };
+
+    if (loading) return <Box textAlign="center" mt={5}><CircularProgress /></Box>;
 
     return (
-        <Box sx={{ display: "flex", minHeight: "100vh", backgroundColor: "#f0f0f0" }}>
-            <Box sx={{
-                width: 280,
-                borderRight: "1px solid #ccc",
-                overflowY: "auto",
-                p: 2,
-                backgroundColor: "#fff",
-                boxShadow: "2px 0px 5px rgba(0, 0, 0, 0.1)"
-            }}>
+        <Box sx={{ display: "flex", minHeight: "100vh" }}>
+            {/* Список пациентов */}
+            <Box sx={{ width: 280, borderRight: "1px solid #ccc", p: 2, background: "#fff" }}>
                 <Typography variant="h5" mb={2}>Пациенты</Typography>
-
                 <TextField
-                    fullWidth
-                    placeholder="Поиск по ФИО, ИИН, Email"
-                    variant="outlined"
+                    fullWidth placeholder="Поиск"
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
                     sx={{ mb: 2 }}
                 />
-
                 <List>
-                    {filteredPatients.map((patient) => (
-                        <ListItem button key={patient.id} onClick={() => openChat(patient)}>
-                            <ListItemAvatar>
-                                <Avatar src={patient.photo} />
-                            </ListItemAvatar>
-                            <ListItemText
-                                primary={patient.name}
-                                secondary={`ИИН: ${patient.iin}`}
-                            />
+                    {filteredPatients.map(p => (
+                        <ListItem button key={p.id} onClick={() => openChat(p)}>
+                            <ListItemAvatar><Avatar src={p.photo} /></ListItemAvatar>
+                            <ListItemText primary={p.name} secondary={`ИИН: ${p.iin}`} />
                         </ListItem>
                     ))}
                 </List>
             </Box>
 
+            {/* Окно чата */}
             <Box sx={{ flexGrow: 1, p: 3 }}>
                 {selectedPatient ? (
                     <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
                         <Typography variant="h5" fontWeight="bold" mb={2}>
                             Чат с {selectedPatient.name}
                         </Typography>
-                        <Paper sx={{ flex: 1, p: 2, overflowY: "auto", boxShadow: "2px 0px 5px rgba(0, 0, 0, 0.1)", maxHeight: "80vh" }}>
-                            {messages.map((msg, index) => (
-                                <Box key={index} sx={{
-                                    display: "flex",
-                                    justifyContent: msg.sender === auth.currentUser.email ? "flex-end" : "flex-start",
-                                    mb: 1
-                                }}>
-                                    <Paper
-                                        elevation={3}
-                                        sx={{
-                                            p: 1.5,
-                                            background: msg.sender === auth.currentUser.email ? "#1976d2" : "#ffffff",
-                                            color: msg.sender === auth.currentUser.email ? "#fff" : "#000",
-                                            borderRadius: 2,
-                                            maxWidth: "70%",
-                                            boxShadow: "2px 2px 10px rgba(0, 0, 0, 0.1)"
-                                        }}
-                                    >
-                                        <Typography>{msg.text}</Typography>
-                                        <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                                            {msg.sender === auth.currentUser.email ? "Вы" : selectedPatient.name}
+                        <Paper sx={{ flex: 1, p: 2, overflowY: "auto", maxHeight: "75vh" }}>
+                            {messages.map((msg, idx) => (
+                                <Box key={idx} sx={{ display: "flex", justifyContent: msg.sender === auth.currentUser.email ? "flex-end" : "flex-start", mb: 1 }}>
+                                    <Paper sx={{
+                                        p: 1.5,
+                                        borderRadius: 2,
+                                        maxWidth: "70%",
+                                        background: msg.sender === auth.currentUser.email ? "#1976d2" : "#f0f0f0",
+                                        color: msg.sender === auth.currentUser.email ? "#fff" : "#000"
+                                    }}>
+                                        {msg.type === "text" && <Typography>{msg.text}</Typography>}
+                                        {msg.type === "image" && (
+                                            <img
+                                                src={msg.fileUrl}
+                                                alt="Фото"
+                                                style={{ maxWidth: 200, borderRadius: 8 }}
+                                            />
+                                        )}
+                                        {msg.type === "audio" && (
+                                            <audio
+                                                style={{ width: "100%", marginTop: 6 }}
+                                                controls
+                                                src={msg.fileUrl}
+                                            >
+                                                Ваш браузер не поддерживает аудио.
+                                            </audio>
+                                        )}
+                                        <Typography variant="caption" sx={{ mt: 1, display: "block", textAlign: "right", opacity: 0.7 }}>
+                                            {msg.dateCreated?.seconds
+                                                ? new Date(msg.dateCreated.seconds * 1000).toLocaleTimeString([], {
+                                                    hour: "2-digit",
+                                                    minute: "2-digit"
+                                                })
+                                                : "⏳"}
                                         </Typography>
                                     </Paper>
                                 </Box>
                             ))}
-                            <div ref={bottomRef}></div>
+                            <div ref={bottomRef} />
                         </Paper>
+
+                        {/* Отправка сообщений */}
                         <Box sx={{ p: 2, borderTop: "1px solid #ccc", background: "#fafafa" }}>
-                            <Stack direction="row" spacing={2} alignItems="center">
+                            <Stack direction="row" spacing={1}>
                                 <TextField
                                     fullWidth
-                                    placeholder="Введите сообщение..."
+                                    placeholder="Введите сообщение"
                                     value={messageText}
                                     onChange={e => setMessageText(e.target.value)}
-                                    onKeyPress={e => e.key === "Enter" && sendMessage()}
+                                    onKeyPress={e => e.key === "Enter" && sendMessage("text", messageText)}
                                 />
-                                <IconButton color="primary" onClick={sendMessage}>
+                                <input type="file" accept="image/*" hidden id="upload-image" onChange={handleImageUpload} />
+                                <label htmlFor="upload-image">
+                                    <IconButton color="primary" component="span">
+                                        <AddPhotoAlternateIcon />
+                                    </IconButton>
+                                </label>
+                                <IconButton color="primary" onClick={handleAudioRecord}>
+                                    <MicIcon />
+                                </IconButton>
+                                <IconButton color="primary" onClick={() => sendMessage("text", messageText)}>
                                     <SendIcon />
                                 </IconButton>
                             </Stack>
                         </Box>
                     </Box>
                 ) : (
-                    <Typography variant="h6">Выберите пациента для чата</Typography>
+                    <Typography variant="h6">Выберите пациента</Typography>
                 )}
             </Box>
         </Box>
